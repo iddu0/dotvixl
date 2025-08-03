@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Manual PyInstaller Build & Release
 
 on:
   push:
@@ -10,26 +10,24 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: 📁 Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install pyqt6 pyinstaller
 
-      - name: Build with PyInstaller
-        uses: Martin005/pyinstaller-action@v1.2.0
-        with:
-          python_ver: '3.11'
-          spec: 'vixl_gui.py'
-          pyinstaller_version: '5.13.2'
+      - name: 🛠️ Build EXE with PyInstaller
+        run: |
+          pyinstaller --noconfirm --onefile vixl_gui.py
 
-      - name: Upload to GitHub Releases
+      - name: 🚀 Upload EXE to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           files: dist/vixl_gui.exe
