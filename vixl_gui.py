@@ -31,19 +31,32 @@ class VixlPacker(QThread):
             file_table = b""
             file_data = b""
             offset = 0
+            file_entries = []
 
-            total_files = len(self.input_paths)
+            # gather all files with relative paths
+            for path in self.input_paths:
+                p = Path(path)
+                base = p.parent if p.is_file() else p
+                if p.is_dir():
+                    for f in p.rglob("*"):
+                        if f.is_file():
+                            rel = str(f.relative_to(base)).replace("\\", "/")
+                            file_entries.append((f, rel))
+                else:
+                    rel = p.name
+                    file_entries.append((p, rel))
+
+            total_files = len(file_entries)
             if total_files == 0:
                 self.error.emit("No files to pack.")
                 return
 
-            for i, path_str in enumerate(self.input_paths):
-                file = Path(path_str)
+            for i, (file, rel_path) in enumerate(file_entries):
                 data = file.read_bytes()
                 comp = zlib.compress(data)
-                rel_path = str(file).encode("utf-8")
-                file_table += struct.pack("B", len(rel_path))
-                file_table += rel_path
+                rel_bytes = rel_path.encode("utf-8")
+                file_table += struct.pack("B", len(rel_bytes))
+                file_table += rel_bytes
                 file_table += struct.pack("<III", offset, len(data), len(comp))
                 file_data += comp
                 offset += len(comp)
@@ -62,7 +75,6 @@ class VixlPacker(QThread):
             self.finished.emit(self.archive_path)
         except Exception as e:
             self.error.emit(str(e))
-
 
 def unpack_vixl(archive_path, output_dir):
     with open(archive_path, "rb") as f:
