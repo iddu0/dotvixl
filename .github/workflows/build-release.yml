@@ -27,7 +27,7 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --noconfirm --onefile vixl_gui.py
+          pyinstaller --noconfirm --onefile --windowed vixl_gui.py
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v2
