@@ -1,7 +1,6 @@
 # dotvixl
 ---
 dotvixl is an archive format like .zip or .7z, and I made it because I was bored<br>
-some perks that dotvixl offers:<br>
 I got ChatGPT to offer some advantages that dotvixl has over other archival formats, and here they are:
 - custom lightweight design
 it’s built with simple structures and minimal headers, so it can be easier to parse or tweak if you want—no heavy compression schemes or complex metadata.
