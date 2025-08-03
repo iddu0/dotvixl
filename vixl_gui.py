@@ -1,6 +1,9 @@
-import sys, os, struct
-from pathlib import Path
+import sys
+import os
+import struct
+import zlib
 import zstandard as zstd
+from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog,
@@ -8,12 +11,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
+# === VIXL CORE ===
+
 MAGIC = b"VIXL"
-VERSION = 2  # bumped version for zstd
-FLAG_ZSTD = 0x02  # new flag for zstd compression
+VERSION = 2
+FLAG_COMPRESSED = 0x02  # now zstd
 
-
-# === THREAD PACKER ===
 class VixlPacker(QThread):
     progress = pyqtSignal(int)
     finished = pyqtSignal(str)
@@ -30,19 +33,21 @@ class VixlPacker(QThread):
             file_data = b""
             offset = 0
 
-            cctx = zstd.ZstdCompressor(level=9, long_distance_matching=True)
             total_files = len(self.input_paths)
+            if total_files == 0:
+                self.error.emit("No files to pack.")
+                return
+
+            cctx = zstd.ZstdCompressor(level=9)
 
             for i, path_str in enumerate(self.input_paths):
                 file = Path(path_str)
                 data = file.read_bytes()
                 comp = cctx.compress(data)
-
                 rel_path = str(file).encode("utf-8")
                 file_table += struct.pack("B", len(rel_path))
                 file_table += rel_path
-                file_table += struct.pack("<QQQ", offset, len(data), len(comp))
-
+                file_table += struct.pack("<III", offset, len(data), len(comp))
                 file_data += comp
                 offset += len(comp)
 
@@ -50,9 +55,9 @@ class VixlPacker(QThread):
 
             header = MAGIC
             header += struct.pack("B", VERSION)
-            header += struct.pack("B", FLAG_ZSTD)
+            header += struct.pack("B", FLAG_COMPRESSED)
             header += struct.pack("<H", total_files)
-            header += b"\x00" * 24  # reserved
+            header += b"\x00" * 24
 
             with open(self.archive_path, "wb") as f:
                 f.write(header + file_table + file_data)
@@ -62,26 +67,21 @@ class VixlPacker(QThread):
             self.error.emit(str(e))
 
 
-# === UNPACKER ===
 def unpack_vixl(archive_path, output_dir):
     with open(archive_path, "rb") as f:
         if f.read(4) != MAGIC:
-            raise ValueError("Not a valid .vixl archive")
+            raise ValueError("not a valid .vixl archive")
 
-        version = struct.unpack("B", f.read(1))[0]
-        flags = struct.unpack("B", f.read(1))[0]
+        version = f.read(1)
+        flags = f.read(1)
         num_files = struct.unpack("<H", f.read(2))[0]
-        f.read(24)  # reserved
-
-        use_zstd = bool(flags & FLAG_ZSTD)
-        if not use_zstd:
-            raise ValueError("Only Zstandard-compressed .vixl archives are supported")
+        f.read(24)
 
         files = []
         for _ in range(num_files):
             path_len = struct.unpack("B", f.read(1))[0]
             path = f.read(path_len).decode()
-            offset, size, comp_size = struct.unpack("<QQQ", f.read(24))
+            offset, size, comp_size = struct.unpack("<III", f.read(12))
             files.append((path, offset, size, comp_size))
 
         base = f.tell()
@@ -90,22 +90,22 @@ def unpack_vixl(archive_path, output_dir):
         for path, offset, size, comp_size in files:
             f.seek(base + offset)
             comp_data = f.read(comp_size)
-            raw = dctx.decompress(comp_data, max_output_size=size)
-
+            raw = dctx.decompress(comp_data)
             out_path = Path(output_dir) / path
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(raw)
 
-
 # === GUI ===
+
 class VixlWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("📦 VIXL Archiver (Zstandard)")
+        self.setWindowTitle("\ud83d\udce6 VIXL Archiver")
         self.setFixedSize(400, 550)
         self.setAcceptDrops(True)
 
         self.layout = QVBoxLayout(self)
+
         self.label = QLabel("Drag in files or use the buttons")
         self.layout.addWidget(self.label)
 
@@ -159,7 +159,6 @@ class VixlWindow(QWidget):
         if not self.files:
             QMessageBox.warning(self, "No files", "Add some files first.")
             return
-
         save_path, _ = QFileDialog.getSaveFileName(self, "Save Archive", filter="VIXL Archives (*.vixl)")
         if save_path:
             self.progress.setVisible(True)
@@ -178,6 +177,7 @@ class VixlWindow(QWidget):
                     file_entries.append(str(p))
 
             self.thread = VixlPacker(save_path, file_entries)
+
             self.thread.progress.connect(self.progress.setValue)
             self.thread.finished.connect(self.on_pack_done)
             self.thread.error.connect(self.on_pack_error)
@@ -205,8 +205,6 @@ class VixlWindow(QWidget):
                 except Exception as e:
                     QMessageBox.critical(self, "Error", str(e))
 
-
-# === ENTRYPOINT ===
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = VixlWindow()
