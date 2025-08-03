@@ -31,20 +31,14 @@ class VixlPacker(QThread):
             file_table = b""
             file_data = b""
             offset = 0
-            file_entries = []
 
-            for input_path in self.input_paths:
-                p = Path(input_path)
-                if p.is_dir():
-                    for f in p.rglob("*"):
-                        if f.is_file():
-                            file_entries.append(f)
-                else:
-                    file_entries.append(p)
+            total_files = len(self.input_paths)
+            if total_files == 0:
+                self.error.emit("No files to pack.")
+                return
 
-            total_files = len(file_entries)
-
-            for i, file in enumerate(file_entries):
+            for i, path_str in enumerate(self.input_paths):
+                file = Path(path_str)
                 data = file.read_bytes()
                 comp = zlib.compress(data)
                 rel_path = str(file).encode("utf-8")
@@ -166,7 +160,19 @@ class VixlWindow(QWidget):
             self.progress.setValue(0)
             self.pack_button.setEnabled(False)
 
-            self.thread = VixlPacker(save_path, self.files)
+            # flatten all files/folders first
+            file_entries = []
+            for entry in self.files:
+                p = Path(entry)
+                if p.is_dir():
+                    for f in p.rglob("*"):
+                        if f.is_file():
+                            file_entries.append(str(f))
+                else:
+                    file_entries.append(str(p))
+
+            self.thread = VixlPacker(save_path, file_entries)
+
             self.thread.progress.connect(self.progress.setValue)
             self.thread.finished.connect(self.on_pack_done)
             self.thread.error.connect(self.on_pack_error)
@@ -175,6 +181,7 @@ class VixlWindow(QWidget):
     def on_pack_done(self, path):
         self.pack_button.setEnabled(True)
         self.progress.setVisible(False)
+        self.progress.setValue(100)
         QMessageBox.information(self, "Success", f"Packed into {path}")
 
     def on_pack_error(self, err):
