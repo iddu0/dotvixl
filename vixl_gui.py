@@ -1,17 +1,19 @@
-import sys, os, struct, zlib
+import sys, os, struct
 from pathlib import Path
+import zstandard as zstd
+
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog,
     QListWidget, QMessageBox, QLabel, QProgressBar
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
-# === VIXL CORE ===
-
 MAGIC = b"VIXL"
-VERSION = 1
-FLAG_COMPRESSED = 0x01
+VERSION = 2  # bumped version for zstd
+FLAG_ZSTD = 0x02  # new flag for zstd compression
 
+
+# === THREAD PACKER ===
 class VixlPacker(QThread):
     progress = pyqtSignal(int)
     finished = pyqtSignal(str)
@@ -24,92 +26,82 @@ class VixlPacker(QThread):
 
     def run(self):
         try:
-            CHUNK_SIZE = 1024 * 1024  # 1MB
             file_table = b""
             file_data = b""
             offset = 0
-            total_size = 0
-            file_sizes = []
 
-            # collect file sizes
-            for path_str in self.input_paths:
-                p = Path(path_str)
-                size = p.stat().st_size
-                total_size += size
-                file_sizes.append((p, size))
+            cctx = zstd.ZstdCompressor(level=3)
+            total_files = len(self.input_paths)
 
-            if total_size == 0:
-                self.error.emit("No data to pack.")
-                return
+            for i, path_str in enumerate(self.input_paths):
+                file = Path(path_str)
+                data = file.read_bytes()
+                comp = cctx.compress(data)
 
-            processed_size = 0
-            for file, orig_size in file_sizes:
                 rel_path = str(file).encode("utf-8")
-                comp_obj = zlib.compressobj()
-                comp_data = b""
-
-                with file.open("rb") as f:
-                    while chunk := f.read(CHUNK_SIZE):
-                        comp_data += comp_obj.compress(chunk)
-                        processed_size += len(chunk)
-                        percent = int((processed_size / total_size) * 100)
-                        self.progress.emit(percent)
-
-                    comp_data += comp_obj.flush()
-
                 file_table += struct.pack("B", len(rel_path))
                 file_table += rel_path
-                file_table += struct.pack("<III", offset, orig_size, len(comp_data))
-                file_data += comp_data
-                offset += len(comp_data)
+                file_table += struct.pack("<QQQ", offset, len(data), len(comp))
+
+                file_data += comp
+                offset += len(comp)
+
+                self.progress.emit(int((i + 1) / total_files * 100))
 
             header = MAGIC
             header += struct.pack("B", VERSION)
-            header += struct.pack("B", FLAG_COMPRESSED)
-            header += struct.pack("<H", len(file_sizes))
-            header += b"\x00" * 24
+            header += struct.pack("B", FLAG_ZSTD)
+            header += struct.pack("<H", total_files)
+            header += b"\x00" * 24  # reserved
 
             with open(self.archive_path, "wb") as f:
                 f.write(header + file_table + file_data)
 
-            self.progress.emit(100)
             self.finished.emit(self.archive_path)
         except Exception as e:
             self.error.emit(str(e))
 
 
+# === UNPACKER ===
 def unpack_vixl(archive_path, output_dir):
     with open(archive_path, "rb") as f:
         if f.read(4) != MAGIC:
-            raise ValueError("not a valid .vixl archive")
+            raise ValueError("Not a valid .vixl archive")
 
-        f.read(1)  # version
-        f.read(1)  # flags
+        version = struct.unpack("B", f.read(1))[0]
+        flags = struct.unpack("B", f.read(1))[0]
         num_files = struct.unpack("<H", f.read(2))[0]
-        f.read(24)
+        f.read(24)  # reserved
+
+        use_zstd = bool(flags & FLAG_ZSTD)
+        if not use_zstd:
+            raise ValueError("Only Zstandard-compressed .vixl archives are supported")
 
         files = []
         for _ in range(num_files):
             path_len = struct.unpack("B", f.read(1))[0]
             path = f.read(path_len).decode()
-            offset, size, comp_size = struct.unpack("<III", f.read(12))
+            offset, size, comp_size = struct.unpack("<QQQ", f.read(24))
             files.append((path, offset, size, comp_size))
 
         base = f.tell()
+        dctx = zstd.ZstdDecompressor()
+
         for path, offset, size, comp_size in files:
             f.seek(base + offset)
             comp_data = f.read(comp_size)
-            raw = zlib.decompress(comp_data)
+            raw = dctx.decompress(comp_data, max_output_size=size)
+
             out_path = Path(output_dir) / path
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(raw)
 
-# === GUI ===
 
+# === GUI ===
 class VixlWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("📦 VIXL Archiver")
+        self.setWindowTitle("📦 VIXL Archiver (Zstandard)")
         self.setFixedSize(400, 550)
         self.setAcceptDrops(True)
 
@@ -167,12 +159,14 @@ class VixlWindow(QWidget):
         if not self.files:
             QMessageBox.warning(self, "No files", "Add some files first.")
             return
+
         save_path, _ = QFileDialog.getSaveFileName(self, "Save Archive", filter="VIXL Archives (*.vixl)")
         if save_path:
             self.progress.setVisible(True)
             self.progress.setValue(0)
             self.pack_button.setEnabled(False)
 
+            # flatten all files/folders first
             file_entries = []
             for entry in self.files:
                 p = Path(entry)
@@ -211,6 +205,8 @@ class VixlWindow(QWidget):
                 except Exception as e:
                     QMessageBox.critical(self, "Error", str(e))
 
+
+# === ENTRYPOINT ===
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = VixlWindow()
