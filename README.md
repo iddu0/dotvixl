@@ -1,6 +1,6 @@
 # dotvixl
 ---
-dotvixl is an archive format like .zip or .7z, and I made it because I was bored<br>
+dotvixl (.VIXL) is an archive format like .zip or .7z, and I made it because I was bored<br>
 ---
 ### Advantages of dotvixl:
 I got ChatGPT to offer some advantages that dotvixl has over other archival formats, and here they are:
