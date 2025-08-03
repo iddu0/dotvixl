@@ -30,7 +30,7 @@ class VixlPacker(QThread):
             file_data = b""
             offset = 0
 
-            cctx = zstd.ZstdCompressor(level=3)
+            cctx = zstd.ZstdCompressor(level=9, long_distance_matching=True)
             total_files = len(self.input_paths)
 
             for i, path_str in enumerate(self.input_paths):
