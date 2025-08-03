@@ -23,7 +23,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Build with PyInstaller
-        uses: FHPythonUtils/pyinstaller-action@v1
+        uses: Martin005/pyinstaller-action@v1
         with:
           python_ver: '3.11'
           spec: 'vixl_gui.py'
