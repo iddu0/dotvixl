@@ -79,7 +79,7 @@ def unpack_vixl(archive_path, output_dir):
 
         files = []
         for _ in range(num_files):
-            path_len = struct.unpack("<H", f.read(1))[0]
+            path_len = struct.unpack("<H", f.read(2))[0]
             path = f.read(path_len).decode()
             offset, size, comp_size = struct.unpack("<III", f.read(12))
             files.append((path, offset, size, comp_size))
