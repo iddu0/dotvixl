@@ -1,6 +1,8 @@
 # dotvixl
 ---
 dotvixl is an archive format like .zip or .7z, and I made it because I was bored<br>
+---
+### Advantages of dotvixl
 I got ChatGPT to offer some advantages that dotvixl has over other archival formats, and here they are:
 - custom lightweight design
 it’s built with simple structures and minimal headers, so it can be easier to parse or tweak if you want—no heavy compression schemes or complex metadata.
@@ -14,6 +16,7 @@ the archive stores filenames with their offsets and sizes in a straightforward w
 - small fixed header with versioning
 the fixed header includes a magic number and version byte, so your parser can detect and support future updates cleanly.
 
+---
 ### things that dotvixl uses to be made possible:
 
 1. Python Standard Library (built-in)
@@ -53,3 +56,5 @@ the fixed header includes a magic number and version byte, so your parser can de
     - pip — Python package manager
 
     - virtualenv — isolated Python environments
+---
+### An Extractor/Archiver can be downloaded in the Releases tab.
