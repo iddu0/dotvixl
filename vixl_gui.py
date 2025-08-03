@@ -1,21 +1,36 @@
-import sys
-import os
-import struct
-import zlib
+import sys, os, struct, zlib
 from pathlib import Path
-
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog,
     QListWidget, QMessageBox, QLabel, QProgressBar
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
-# === VIXL CORE ===
-
 MAGIC = b"VIXL"
 VERSION = 1
 FLAG_COMPRESSED = 0x01
 
+# --- streaming compression ---
+def compress_with_progress(input_path, signal):
+    compressor = zlib.compressobj()
+    chunk_size = 1024 * 1024  # 1MB
+    total_size = os.path.getsize(input_path)
+    processed = 0
+    compressed_data = b""
+
+    with open(input_path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            compressed_data += compressor.compress(chunk)
+            processed += len(chunk)
+            signal.emit(min(int((processed / total_size) * 100), 99))  # emit up to 99%
+    compressed_data += compressor.flush()
+    signal.emit(100)
+    return compressed_data
+
+# --- packer thread ---
 class VixlPacker(QThread):
     progress = pyqtSignal(int)
     finished = pyqtSignal(str)
@@ -33,7 +48,6 @@ class VixlPacker(QThread):
             offset = 0
             file_entries = []
 
-            # gather all files with relative paths
             for path in self.input_paths:
                 p = Path(path)
                 base = p.parent if p.is_file() else p
@@ -52,16 +66,14 @@ class VixlPacker(QThread):
                 return
 
             for i, (file, rel_path) in enumerate(file_entries):
-                data = file.read_bytes()
-                comp = zlib.compress(data)
                 rel_bytes = rel_path.encode("utf-8")
+                comp = compress_with_progress(str(file), self.progress)
+                raw = file.read_bytes()
                 file_table += struct.pack("B", len(rel_bytes))
                 file_table += rel_bytes
-                file_table += struct.pack("<III", offset, len(data), len(comp))
+                file_table += struct.pack("<III", offset, len(raw), len(comp))
                 file_data += comp
                 offset += len(comp)
-
-                self.progress.emit(int((i + 1) / total_files * 100))
 
             header = MAGIC
             header += struct.pack("B", VERSION)
@@ -76,11 +88,11 @@ class VixlPacker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+# --- unpacker ---
 def unpack_vixl(archive_path, output_dir):
     with open(archive_path, "rb") as f:
         if f.read(4) != MAGIC:
             raise ValueError("not a valid .vixl archive")
-
         f.read(1)  # version
         f.read(1)  # flags
         num_files = struct.unpack("<H", f.read(2))[0]
@@ -102,17 +114,15 @@ def unpack_vixl(archive_path, output_dir):
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(raw)
 
-# === GUI ===
-
+# --- GUI ---
 class VixlWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("\ud83d\udce6 VIXL Archiver")
+        self.setWindowTitle("📦 VIXL Archiver")
         self.setFixedSize(400, 550)
         self.setAcceptDrops(True)
 
         self.layout = QVBoxLayout(self)
-
         self.label = QLabel("Drag in files or use the buttons")
         self.layout.addWidget(self.label)
 
@@ -172,19 +182,11 @@ class VixlWindow(QWidget):
             self.progress.setValue(0)
             self.pack_button.setEnabled(False)
 
-            # flatten all files/folders first
             file_entries = []
             for entry in self.files:
-                p = Path(entry)
-                if p.is_dir():
-                    for f in p.rglob("*"):
-                        if f.is_file():
-                            file_entries.append(str(f))
-                else:
-                    file_entries.append(str(p))
+                file_entries.append(entry)
 
             self.thread = VixlPacker(save_path, file_entries)
-
             self.thread.progress.connect(self.progress.setValue)
             self.thread.finished.connect(self.on_pack_done)
             self.thread.error.connect(self.on_pack_error)
