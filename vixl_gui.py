@@ -6,9 +6,9 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog,
-    QListWidget, QMessageBox, QLabel
+    QListWidget, QMessageBox, QLabel, QProgressBar
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 # === VIXL CORE ===
 
@@ -16,47 +16,67 @@ MAGIC = b"VIXL"
 VERSION = 1
 FLAG_COMPRESSED = 0x01
 
-def pack_vixl(archive_path, input_paths):
-    file_table = b""
-    file_data = b""
-    offset = 0
-    file_entries = []
+class VixlPacker(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(str)
+    error = pyqtSignal(str)
 
-    for input_path in input_paths:
-        p = Path(input_path)
-        if p.is_dir():
-            for f in p.rglob("*"):
-                if f.is_file():
-                    file_entries.append(f)
-        else:
-            file_entries.append(p)
+    def __init__(self, archive_path, input_paths):
+        super().__init__()
+        self.archive_path = archive_path
+        self.input_paths = input_paths
 
-    for file in file_entries:
-        data = file.read_bytes()
-        comp = zlib.compress(data)
-        rel_path = str(file).encode("utf-8")
-        file_table += struct.pack("B", len(rel_path))
-        file_table += rel_path
-        file_table += struct.pack("<III", offset, len(data), len(comp))
-        file_data += comp
-        offset += len(comp)
+    def run(self):
+        try:
+            file_table = b""
+            file_data = b""
+            offset = 0
+            file_entries = []
 
-    header = MAGIC
-    header += struct.pack("B", VERSION)
-    header += struct.pack("B", FLAG_COMPRESSED)
-    header += struct.pack("<H", len(file_entries))
-    header += b"\x00" * 24
+            for input_path in self.input_paths:
+                p = Path(input_path)
+                if p.is_dir():
+                    for f in p.rglob("*"):
+                        if f.is_file():
+                            file_entries.append(f)
+                else:
+                    file_entries.append(p)
 
-    with open(archive_path, "wb") as f:
-        f.write(header + file_table + file_data)
+            total_files = len(file_entries)
+
+            for i, file in enumerate(file_entries):
+                data = file.read_bytes()
+                comp = zlib.compress(data)
+                rel_path = str(file).encode("utf-8")
+                file_table += struct.pack("B", len(rel_path))
+                file_table += rel_path
+                file_table += struct.pack("<III", offset, len(data), len(comp))
+                file_data += comp
+                offset += len(comp)
+
+                self.progress.emit(int((i + 1) / total_files * 100))
+
+            header = MAGIC
+            header += struct.pack("B", VERSION)
+            header += struct.pack("B", FLAG_COMPRESSED)
+            header += struct.pack("<H", total_files)
+            header += b"\x00" * 24
+
+            with open(self.archive_path, "wb") as f:
+                f.write(header + file_table + file_data)
+
+            self.finished.emit(self.archive_path)
+        except Exception as e:
+            self.error.emit(str(e))
+
 
 def unpack_vixl(archive_path, output_dir):
     with open(archive_path, "rb") as f:
         if f.read(4) != MAGIC:
             raise ValueError("not a valid .vixl archive")
 
-        version = f.read(1)
-        flags = f.read(1)
+        f.read(1)  # version
+        f.read(1)  # flags
         num_files = struct.unpack("<H", f.read(2))[0]
         f.read(24)
 
@@ -81,8 +101,8 @@ def unpack_vixl(archive_path, output_dir):
 class VixlWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("📦 VIXL Archiver")
-        self.setFixedSize(400, 500)
+        self.setWindowTitle("\ud83d\udce6 VIXL Archiver")
+        self.setFixedSize(400, 550)
         self.setAcceptDrops(True)
 
         self.layout = QVBoxLayout(self)
@@ -92,6 +112,11 @@ class VixlWindow(QWidget):
 
         self.file_list = QListWidget()
         self.layout.addWidget(self.file_list)
+
+        self.progress = QProgressBar()
+        self.progress.setValue(0)
+        self.progress.setVisible(False)
+        self.layout.addWidget(self.progress)
 
         self.add_button = QPushButton("➕ Add Files/Folders")
         self.add_button.clicked.connect(self.add_files)
@@ -137,11 +162,25 @@ class VixlWindow(QWidget):
             return
         save_path, _ = QFileDialog.getSaveFileName(self, "Save Archive", filter="VIXL Archives (*.vixl)")
         if save_path:
-            try:
-                pack_vixl(save_path, self.files)
-                QMessageBox.information(self, "Success", f"Packed into {save_path}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", str(e))
+            self.progress.setVisible(True)
+            self.progress.setValue(0)
+            self.pack_button.setEnabled(False)
+
+            self.thread = VixlPacker(save_path, self.files)
+            self.thread.progress.connect(self.progress.setValue)
+            self.thread.finished.connect(self.on_pack_done)
+            self.thread.error.connect(self.on_pack_error)
+            self.thread.start()
+
+    def on_pack_done(self, path):
+        self.pack_button.setEnabled(True)
+        self.progress.setVisible(False)
+        QMessageBox.information(self, "Success", f"Packed into {path}")
+
+    def on_pack_error(self, err):
+        self.pack_button.setEnabled(True)
+        self.progress.setVisible(False)
+        QMessageBox.critical(self, "Error", err)
 
     def unpack_archive(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open .vixl Archive", filter="VIXL Archives (*.vixl)")
