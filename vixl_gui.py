@@ -47,7 +47,7 @@ class VixlPacker(QThread):
                 rel_path = str(file).encode("utf-8")
                 file_table += struct.pack("<H", len(rel_path))
                 file_table += rel_path
-                file_table += struct.pack("<III", offset, len(data), len(comp))
+                file_table += struct.pack("<QQQ", offset, len(data), len(comp))
                 file_data += comp
                 offset += len(comp)
 
@@ -81,7 +81,7 @@ def unpack_vixl(archive_path, output_dir):
         for _ in range(num_files):
             path_len = struct.unpack("<H", f.read(2))[0]
             path = f.read(path_len).decode()
-            offset, size, comp_size = struct.unpack("<III", f.read(12))
+            offset, size, comp_size = struct.unpack("<QQQ", f.read(12))
             files.append((path, offset, size, comp_size))
 
         base = f.tell()
